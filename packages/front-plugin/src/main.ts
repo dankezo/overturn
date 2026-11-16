@@ -1,4 +1,4 @@
-import Front from "@frontapp/plugin-sdk";
+import Front, { type ApplicationSingleConversation } from "@frontapp/plugin-sdk";
 import type { CaptureResult } from "@overturn-ai/shared";
 import {
   type AppSettings,
@@ -14,44 +14,17 @@ import {
   settingsFrom,
   statusLine,
 } from "./capture";
+import { type ConversationReader, draftBodyFromReader, rawSettingsFrom, snapshotFromReader } from "./front";
 
 /**
- * The slice of Front's plugin SDK this app uses, as documented at
- * https://dev.frontapp.com/docs/plugin-sdk: a sidebar plugin receives the open
- * conversation through `contextUpdates`; a composer plugin can read the current
- * draft with `fetchDraft`. There is no send event and no pre-send hook in the SDK,
- * so a send is observed as the new outbound message on the conversation, and
- * `require_reason` holds the capture, never the send (see capture.ts).
+ * Panel wiring over the typed SDK adapter in front.ts. Front's plugin SDK delivers
+ * the open conversation through `contextUpdates`; the conversation object carries
+ * no messages (they are listed through the context), the composer's draft is read
+ * by the draft id on the conversation, and the settings arrive on the context's
+ * entry point. There is no send event and no pre-send hook in the SDK, so a send is
+ * observed as the new outbound message on the conversation, and `require_reason`
+ * holds the capture, never the send (see capture.ts).
  */
-interface FrontConversation {
-  id: string;
-  subject?: string;
-  tags?: Array<{ name: string }>;
-  recipient?: { name?: string; handle?: string };
-  customFields?: Record<string, unknown>;
-}
-interface FrontMessage {
-  id: string;
-  body?: string;
-  type?: string;
-  isInbound?: boolean;
-  author?: { name?: string; email?: string };
-  createdAt?: number;
-}
-interface FrontContext {
-  type: string;
-  conversation?: FrontConversation & { messages?: FrontMessage[] };
-  teammate?: { email?: string; name?: string };
-  draftId?: string;
-}
-interface FrontClient {
-  contextUpdates: {
-    subscribe(observer: (ctx: FrontContext) => void): { unsubscribe(): void };
-  };
-  fetchDraft(draftId: string): Promise<{ content?: { body?: string } } | null>;
-}
-
-const client = Front as unknown as FrontClient;
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -64,39 +37,35 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
-/** Plugin settings arrive with the plugin configuration; read them off the page URL. */
-function rawSettings(): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of new URLSearchParams(location.search)) out[k] = v;
-  return out;
-}
-
-function snapshotFrom(ctx: FrontContext): ConversationSnapshot | null {
-  const c = ctx.conversation;
-  if (!c) return null;
-  return {
-    id: c.id,
-    subject: c.subject ?? null,
-    recipientName: c.recipient?.name ?? null,
-    recipientEmail: c.recipient?.handle ?? null,
-    messages: (c.messages ?? []).map((m) => ({
-      id: m.id,
-      body: m.body ?? "",
-      kind: m.type === "comment" || m.type === "note" ? "note" : m.isInbound ? "inbound" : "outbound",
-      authorName: m.author?.name ?? null,
-      authorEmail: m.author?.email ?? null,
-      createdAt: m.createdAt ? new Date(m.createdAt * 1000).toISOString() : null,
-    })),
-    customFields: c.customFields ?? {},
-    url: `https://app.frontapp.com/open/${c.id}`,
-  };
+function apiKeyFrom(raw: Record<string, unknown>): string {
+  const value = raw.overturn_api_key;
+  return typeof value === "string" ? value : "";
 }
 
 async function main(): Promise<void> {
-  const settings: AppSettings = settingsFrom(rawSettings());
-  const apiKey = new URLSearchParams(location.search).get("overturn_api_key") ?? "";
-  const detector = createDraftDetector({ minDraftChars: settings.minDraftChars });
+  // Until the first context arrives, the page URL is the only settings source there is.
+  let raw = rawSettingsFrom(undefined, location.search);
+  let settings: AppSettings = settingsFrom(raw);
+  let apiKey = apiKeyFrom(raw);
+  let detector = createDraftDetector({ minDraftChars: settings.minDraftChars });
+  let detectorMinDraftChars = settings.minDraftChars;
   const pending = createPendingCapture();
+
+  // The entry point's properties replace the URL fallback as soon as a context
+  // carries them; a changed minimum draft size rebuilds the detector around the
+  // draft it already holds.
+  const applyRaw = (next: Record<string, unknown>): void => {
+    if (JSON.stringify(next) === JSON.stringify(raw)) return;
+    raw = next;
+    settings = settingsFrom(raw);
+    apiKey = apiKeyFrom(raw);
+    if (settings.minDraftChars !== detectorMinDraftChars) {
+      const current = detector.current();
+      detector = createDraftDetector({ minDraftChars: settings.minDraftChars });
+      detector.set(current);
+      detectorMinDraftChars = settings.minDraftChars;
+    }
+  };
 
   const root = document.getElementById("app")!;
   const status = el("div", { class: "status" }, "Waiting for a draft");
@@ -116,6 +85,7 @@ async function main(): Promise<void> {
   let snapshot: ConversationSnapshot | null = null;
   let actor: string | null = null;
   let draftFields: Record<string, unknown> = {};
+  let lastComposerText = "";
   const seen = new Set<string>();
 
   const render = (): void => {
@@ -225,59 +195,77 @@ async function main(): Promise<void> {
     }
   });
 
-  let lastComposerText = "";
-  client.contextUpdates.subscribe((ctx) => {
-    void (async () => {
-      if (ctx.type === "singleConversation" || ctx.conversation) {
-        const snap = snapshotFrom(ctx);
-        if (!snap) return;
-        const tags = ctx.conversation?.tags?.map((t) => t.name) ?? [];
-        if (!inScope(tags, settings)) {
-          status.textContent = `Not watching: no "${settings.scopeTag}" tag`;
-          return;
+  const feedComposer = (body: string): void => {
+    lastComposerText = body;
+    if (detector.onComposer(body)) {
+      draftFields = snapshot ? readFields(snapshot) : {};
+      render();
+    }
+  };
+
+  const onConversation = async (
+    conversation: ApplicationSingleConversation,
+    reader: ConversationReader,
+    teammateEmail: string,
+  ): Promise<void> => {
+    const snap = await snapshotFromReader(reader);
+    if (!snap) return;
+    const tags = conversation.tags.map((t) => t.name);
+    if (!inScope(tags, settings)) {
+      status.textContent = `Not watching: no "${settings.scopeTag}" tag`;
+      return;
+    }
+    snapshot = snap;
+    actor = teammateEmail;
+    // A drafting agent that recorded its run with the SDK: the draft is its output.
+    if (!detector.current() && apiKey) {
+      try {
+        const res = await fetch(
+          `${settings.baseUrl}/v1/runs?externalId=${encodeURIComponent(`fr:${snap.id}`)}&agent=${encodeURIComponent(settings.agent)}&limit=1`,
+          { headers: { authorization: `Bearer ${apiKey}` } },
+        );
+        const found = (await res.json()) as {
+          items?: Array<{ id: string; output: unknown; agent: string }>;
+        };
+        const run = found.items?.[0];
+        if (run && typeof run.output === "string" && run.output.trim()) {
+          detector.set({ text: run.output, origin: "recorded", runId: run.id, at: Date.now() });
+          draftFields = readFields(snap);
         }
-        snapshot = snap;
-        actor = ctx.teammate?.email ?? actor;
-        // A drafting agent that recorded its run with the SDK: the draft is its output.
-        if (!detector.current() && apiKey) {
-          try {
-            const res = await fetch(
-              `${settings.baseUrl}/v1/runs?externalId=${encodeURIComponent(`fr:${snap.id}`)}&agent=${encodeURIComponent(settings.agent)}&limit=1`,
-              { headers: { authorization: `Bearer ${apiKey}` } },
-            );
-            const found = (await res.json()) as {
-              items?: Array<{ id: string; output: unknown; agent: string }>;
-            };
-            const run = found.items?.[0];
-            if (run && typeof run.output === "string" && run.output.trim()) {
-              detector.set({ text: run.output, origin: "recorded", runId: run.id, at: Date.now() });
-              draftFields = readFields(snap);
-            }
-          } catch {
-            // no recorded draft; the composer is watched instead
-          }
-        }
-        const send = sentFromMessages(seen, snap.messages, settings);
-        for (const m of snap.messages) seen.add(m.id);
-        if (send && detector.current()) {
-          await runDecision(send);
-        }
-        render();
+      } catch {
+        // no recorded draft; the composer is watched instead
       }
-      if (ctx.draftId) {
-        try {
-          const draft = await client.fetchDraft(ctx.draftId);
-          const body = draft?.content?.body ?? "";
-          lastComposerText = body;
-          if (detector.onComposer(body)) {
-            draftFields = snapshot ? readFields(snapshot) : {};
-            render();
-          }
-        } catch {
-          // a draft we cannot read is not a draft we capture
+    }
+    const send = sentFromMessages(seen, snap.messages, settings);
+    for (const m of snap.messages) seen.add(m.id);
+    if (send && detector.current()) {
+      await runDecision(send);
+    }
+    render();
+  };
+
+  // Context updates are handled one at a time: building a snapshot lists the
+  // conversation's messages, and two updates racing would double-count a send.
+  let chain: Promise<void> = Promise.resolve();
+  Front.contextUpdates.subscribe((ctx) => {
+    chain = chain
+      .then(async () => {
+        applyRaw(rawSettingsFrom(ctx.entryPoint, location.search));
+        if (ctx.type === "singleConversation" || ctx.type === "singleConversationPopover") {
+          await onConversation(ctx.conversation, ctx, ctx.teammate.email);
+          const body = await draftBodyFromReader(ctx).catch(() => null);
+          if (body !== null) feedComposer(body);
+        } else if (ctx.type === "messageComposer") {
+          if (ctx.conversation) await onConversation(ctx.conversation, ctx, ctx.teammate.email);
+          feedComposer(ctx.draft.content.body);
+        } else if (ctx.type === "noConversationPopover" && ctx.draftId) {
+          const draft = await ctx.fetchDraft(ctx.draftId).catch(() => undefined);
+          if (draft) feedComposer(draft.content.body);
         }
-      }
-    })();
+      })
+      .catch(() => {
+        // A context that cannot be read changes nothing; the next update is handled fresh.
+      });
   });
   render();
 }
