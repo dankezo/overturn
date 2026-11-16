@@ -1,0 +1,17 @@
+{
+  "canvas_kit": {
+    "initialize_url": "https://YOUR-HOST/initialize",
+    "locations": ["conversation", "inbox"],
+    "submit_url": "https://YOUR-HOST/submit"
+  },
+  "description": "QA for AI-drafted replies: captures the draft, what the teammate sent, and the one-line reason, as a replayable case.",
+  "env": {
+    "INTERCOM_CLIENT_SECRET": "the Intercom app's client secret (verifies X-Body-Signature)",
+    "OVERTURN_AGENT": "support-reply",
+    "OVERTURN_API_KEY": "an Overturn project API key",
+    "OVERTURN_BASE_URL": "https://api.overturn.run",
+    "OVERTURN_REASON_PACK": "support",
+    "OVERTURN_REQUIRE_REASON": "true"
+  },
+  "name": "Overturn"
+}
