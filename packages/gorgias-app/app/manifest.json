@@ -1,0 +1,57 @@
+{
+  "author": { "email": "shireen@overturn.run", "name": "Overturn", "url": "https://overturn.run" },
+  "description": "QA for AI-drafted replies: captures the draft, what the agent sent, and the one-line reason, as a replayable case.",
+  "name": "Overturn",
+  "parameters": [
+    {
+      "default": "https://api.overturn.run",
+      "helpText": "Your Overturn API URL when self-hosting.",
+      "name": "overturn_base_url",
+      "required": false,
+      "type": "text"
+    },
+    {
+      "helpText": "A project API key from Overturn (Settings - API keys).",
+      "name": "overturn_api_key",
+      "required": true,
+      "secure": true,
+      "type": "text"
+    },
+    {
+      "helpText": "Your Gorgias account subdomain, e.g. acme for acme.gorgias.com. The widget reads the ticket and its messages through the Gorgias REST API.",
+      "name": "gorgias_account",
+      "required": true,
+      "type": "text"
+    },
+    {
+      "helpText": "A Gorgias API token with ticket read access, used as the bearer token for the REST calls.",
+      "name": "gorgias_api_token",
+      "required": true,
+      "secure": true,
+      "type": "text"
+    },
+    {
+      "default": "support-reply",
+      "helpText": "The workflow name. One regression suite per workflow.",
+      "name": "agent",
+      "required": false,
+      "type": "text"
+    },
+    {
+      "default": "support",
+      "helpText": "Which one-click reasons agents see when they change a draft. Defaults to the support pack on this surface.",
+      "name": "reason_pack",
+      "required": false,
+      "type": "text"
+    },
+    {
+      "default": true,
+      "helpText": "Hold a changed reply's capture until the agent picks a reason (one click). A sidebar widget cannot stop the send itself; the capture is held instead, never posted reason-less.",
+      "name": "require_reason",
+      "required": false,
+      "type": "checkbox"
+    }
+  ],
+  "version": "0.1.0",
+  "widget": { "location": "ticket_sidebar", "url": "assets/iframe.html" }
+}
