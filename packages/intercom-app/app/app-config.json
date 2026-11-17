@@ -6,12 +6,16 @@
   },
   "description": "QA for AI-drafted replies: captures the draft, what the teammate sent, and the one-line reason, as a replayable case.",
   "env": {
-    "INTERCOM_CLIENT_SECRET": "the Intercom app's client secret (verifies X-Body-Signature)",
+    "INTERCOM_CLIENT_SECRET": "the Intercom app's client secret (verifies X-Body-Signature on Canvas Kit calls and X-Hub-Signature on webhooks)",
     "OVERTURN_AGENT": "support-reply",
     "OVERTURN_API_KEY": "an Overturn project API key",
     "OVERTURN_BASE_URL": "https://api.overturn.run",
+    "OVERTURN_CAPTURE_INTERNAL_NOTES": "false",
+    "OVERTURN_DECISION_FIELDS": "refund_status:status",
     "OVERTURN_REASON_PACK": "support",
     "OVERTURN_REQUIRE_REASON": "true"
   },
-  "name": "Overturn"
+  "name": "Overturn",
+  "webhook_topics": ["conversation.admin.replied", "conversation.admin.noted"],
+  "webhook_url": "https://YOUR-HOST/webhook"
 }

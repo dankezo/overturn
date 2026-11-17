@@ -19,12 +19,14 @@ export interface ConversationSnapshot {
   messages: Array<{
     id: string;
     body: string;
-    /** Customer reply, teammate reply, or an internal note. */
-    kind: "customer" | "agent" | "note" | string;
+    /** Customer reply, teammate reply, an internal note, or a bot (Fin) message. */
+    kind: "customer" | "agent" | "note" | "bot" | string;
     authorName?: string | null;
     authorEmail?: string | null;
     createdAt?: string | null;
   }>;
+  /** Conversation attributes the admin chose as decision fields, by label. */
+  fields: Record<string, unknown>;
   url: string | null;
 }
 
@@ -35,6 +37,8 @@ export interface AppSettings {
   requireReason: boolean;
   /** Also capture internal notes, not only public replies. */
   captureInternalNotes: boolean;
+  /** `refund_status:status, tier` → conversation attributes that are the decision, by label. */
+  decisionFields: Array<{ id: string; label: string }>;
   /** Replies shorter than this never count as a draft (a typed greeting is not a draft). */
   minDraftChars: number;
   /** Which quick-pick reasons the teammate sees: the support pack by default on this surface. */
@@ -46,6 +50,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   agent: "support-reply",
   requireReason: true,
   captureInternalNotes: false,
+  decisionFields: [],
   minDraftChars: 80,
   reasonPack: "support",
 };
@@ -63,14 +68,32 @@ export function settingsFrom(raw: Record<string, unknown>): AppSettings {
     return d;
   };
   const min = Number(str("min_draft_chars") ?? "");
+  const fields = (str("decision_fields") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const [id, label] = s.split(":").map((x) => x.trim());
+      return { id: id!, label: label || id! };
+    });
   return {
     baseUrl: (str("overturn_base_url") ?? DEFAULT_SETTINGS.baseUrl).replace(/\/+$/, ""),
     agent: str("agent") ?? DEFAULT_SETTINGS.agent,
     requireReason: bool("require_reason", DEFAULT_SETTINGS.requireReason),
     captureInternalNotes: bool("capture_internal_notes", DEFAULT_SETTINGS.captureInternalNotes),
+    decisionFields: fields,
     minDraftChars: Number.isFinite(min) && min > 0 ? min : DEFAULT_SETTINGS.minDraftChars,
     reasonPack: reasonPackFrom(str("reason_pack")),
   };
+}
+
+/** Decision-field values from the conversation's custom attributes, by label. */
+export function fieldsFrom(
+  attrs: Record<string, unknown> | null | undefined,
+  settings: AppSettings,
+): Record<string, unknown> {
+  if (settings.decisionFields.length === 0) return {};
+  return Object.fromEntries(settings.decisionFields.map((f) => [f.label, attrs?.[f.id] ?? null]));
 }
 
 /**
@@ -101,6 +124,8 @@ export interface DraftState {
 
 function role(m: ConversationSnapshot["messages"][number]): CaptureMessage["role"] {
   if (m.kind === "note") return "note";
+  // A Fin or bot message is the system talking, not the customer.
+  if (m.kind === "bot") return "system";
   return m.kind === "agent" ? "agent" : "customer";
 }
 
@@ -135,6 +160,19 @@ export function stripHtml(html: string): string {
 export interface PendingSend {
   text: string;
   type: "publicReply" | "internalNote" | string;
+  /** Decision-field values as they are when the reply goes out. */
+  fields: Record<string, unknown>;
+}
+
+/** A draft must be reply-sized; a typed greeting is not a draft. */
+export function acceptDraft(
+  text: string,
+  origin: DraftOrigin,
+  settings: AppSettings,
+  at: number,
+): DraftState | null {
+  if (stripHtml(text).length < settings.minDraftChars) return null;
+  return { text, origin, at };
 }
 
 export type SendDecision =
@@ -146,6 +184,8 @@ export type SendDecision =
 export function decideOnSend(input: {
   conversation: ConversationSnapshot;
   draft: DraftState | null;
+  /** Decision-field values as they were when the draft was put in front of the teammate. */
+  draftFields: Record<string, unknown>;
   send: PendingSend;
   /** The picked reason code (support pack), required for a changed send when requireReason is on. */
   reasonCode: string | null;
@@ -165,8 +205,15 @@ export function decideOnSend(input: {
   const draftText = stripHtml(draft.text);
   if (draftText.length < settings.minDraftChars) return { action: "skip", why: "draft-too-short" };
 
-  const draftAnswer: CaptureAnswer = { text: draftText };
-  const sentAnswer: CaptureAnswer = { text: sentText };
+  const hasFields = settings.decisionFields.length > 0;
+  const draftAnswer: CaptureAnswer = {
+    text: draftText,
+    ...(hasFields ? { fields: input.draftFields } : {}),
+  };
+  const sentAnswer: CaptureAnswer = {
+    text: sentText,
+    ...(hasFields ? { fields: send.fields } : {}),
+  };
   const diff = diffCaptureAnswers(draftAnswer, sentAnswer);
   const reason = input.reason.trim();
   const reasonCode = input.reasonCode?.trim() || null;
@@ -205,7 +252,7 @@ export function statusLine(
     return lastResult.dedup ? "Captured · already in the suite" : "Captured · edit saved as a case";
   }
   if (!d) return "Waiting for a draft";
-  const words = d.text.trim().split(/\s+/).length;
+  const words = stripHtml(d.text).trim().split(/\s+/).filter(Boolean).length;
   return `Draft inserted · ${words} words`;
 }
 

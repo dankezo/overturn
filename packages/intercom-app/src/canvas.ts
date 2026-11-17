@@ -67,7 +67,8 @@ const ORIGIN_OPTIONS: Array<{ type: "option"; id: string; text: string }> = [
  * The canvas for one conversation. Before a draft exists the app renders only the waiting
  * line: a conversation with no draft in it is never read, so there is nothing else to show.
  * With a draft, the form carries the draft, what was sent, where the draft came from, and
- * the one-click reason.
+ * the one-click reason. With a held capture (the reply already went out, the reason is the
+ * only thing missing) the panel asks for just the reason: the sent text is not re-typed.
  */
 export function captureCanvas(opts: {
   draft: DraftState | null;
@@ -75,16 +76,35 @@ export function captureCanvas(opts: {
   settings: AppSettings;
   message?: { text: string; style: "error" | "muted" } | null;
   lastResult?: { kind: string; changed: boolean; dedup: boolean } | null;
+  held?: { changed: boolean; changedFields: string[] } | null;
 }): Canvas {
   const { draft, form, settings } = opts;
-  const components: Component[] = [
-    { type: "text", id: "status", text: statusLine(draft, opts.lastResult ?? null), style: "header" },
-  ];
+  const header = opts.held
+    ? opts.held.changedFields.length > 0
+      ? `Pick why you changed ${opts.held.changedFields.join(", ")}`
+      : "Pick why you changed the reply"
+    : statusLine(draft, opts.lastResult ?? null);
+  const components: Component[] = [{ type: "text", id: "status", text: header, style: "header" }];
   if (opts.message) {
     components.push({ type: "text", id: "message", text: opts.message.text, style: opts.message.style });
   }
   // After a save, the panel is just the result line; before a draft, just the waiting line.
   if (opts.lastResult || !draft) return { content: { components } };
+
+  if (opts.held) {
+    components.push(
+      {
+        type: "single-select",
+        id: "reason_code",
+        label: "Why did you change it? (one click)",
+        ...(form.reasonCode ? { value: form.reasonCode } : {}),
+        options: quickReasons(settings).map((r) => ({ type: "option" as const, id: r.code, text: r.label })),
+      },
+      { type: "textarea", id: "reason_note", label: "Anything else? Optional.", value: form.note },
+      { type: "button", id: "save", label: "Save capture", style: "primary", action: { type: "submit" } },
+    );
+    return { content: { components } };
+  }
 
   components.push(
     {

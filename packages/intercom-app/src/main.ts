@@ -21,6 +21,7 @@ createServer((req, res) => {
         path: req.url ?? "/",
         rawBody,
         signature: req.headers["x-body-signature"] as string | undefined,
+        hubSignature: req.headers["x-hub-signature"] as string | undefined,
       });
       res.writeHead(out.status, { "content-type": "application/json" });
       res.end(JSON.stringify(out.body));

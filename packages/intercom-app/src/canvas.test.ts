@@ -49,6 +49,29 @@ describe("captureCanvas", () => {
     expect(c.content.components).toHaveLength(1);
     expect(c.content.components[0]).toMatchObject({ text: "Captured · edit saved as a case" });
   });
+
+  it("a held capture asks for just the reason - the reply already went out", () => {
+    const c = captureCanvas({
+      draft,
+      form: { ...EMPTY_FORM, draftText: draft.text, sentText: draft.text },
+      settings: DEFAULT_SETTINGS,
+      held: { changed: true, changedFields: [] },
+    });
+    expect(c.content.components[0]).toMatchObject({ text: "Pick why you changed the reply" });
+    expect(c.content.components.some((x) => x.id === "draft_text")).toBe(false);
+    expect(c.content.components.some((x) => x.id === "sent_text")).toBe(false);
+    expect(c.content.components.some((x) => x.id === "reason_code")).toBe(true);
+  });
+
+  it("a held capture names the field that changed", () => {
+    const c = captureCanvas({
+      draft,
+      form: { ...EMPTY_FORM, draftText: draft.text, sentText: draft.text },
+      settings: DEFAULT_SETTINGS,
+      held: { changed: true, changedFields: ["status"] },
+    });
+    expect(c.content.components[0]).toMatchObject({ text: "Pick why you changed status" });
+  });
 });
 
 describe("formFrom", () => {
