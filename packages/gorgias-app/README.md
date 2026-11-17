@@ -1,12 +1,13 @@
 # Overturn for Gorgias
 
-QA for AI-drafted replies, in the Gorgias ticket sidebar. It watches the ticket for the AI draft, diffs it against what the agent actually sends, asks for a one-line reason, and posts the result to `POST /v1/capture`. The draft becomes a recorded run, the difference becomes a case, and the suite replays it against any model before the next prompt or model change. Ecommerce teams are this surface's first users, so the ticket's **order context rides on both answers as fields** (order number, total, currency, payment and fulfilment status): a change to the order between draft and send is scored exactly, like any other decision field.
+QA for AI-drafted replies, in the Gorgias ticket sidebar. It watches the ticket for the AI draft, diffs it against what the agent actually sends, asks for a one-line reason, and posts the result to `POST /v1/capture`. The draft becomes a recorded run, the difference becomes a case, and the suite replays it against any model before the next prompt or model change. Ecommerce teams are this surface's first users, so the ticket's **order context rides on both answers as fields** (order number, total, currency, payment and fulfilment status, taken from the customer's ecommerce integration: the newest order across Shopify, BigCommerce, ...): a change to the order between draft and send is scored exactly, like any other decision field.
 
 ## How it works on this surface
 
 The app is a widget iframe in the ticket sidebar. Gorgias hands the widget the ticket id and the app settings as URL query parameters; the ticket, its messages and its order are then read through the **Gorgias REST API** (the documented surface for widgets). Two honest consequences of that surface, stated rather than papered over:
 
-- **A widget cannot see the reply box.** A draft reaches the panel two ways: a drafting agent recorded its run with the Overturn SDK (`externalId: "gr:<ticket id>"`), and the panel finds it; or the agent pastes the draft into the panel and marks it ("Use this text as the draft"). Sends are observed as new agent messages on the ticket, polled every few seconds.
+- **A widget cannot see the reply box.** A draft reaches the panel two ways: a drafting agent recorded its run with the Overturn SDK (`externalId: "gr:<ticket id>"`), and the panel finds it whenever it appears; or the agent pastes the draft into the panel and marks it ("Use this text as the draft"). Sends are observed as new agent messages on the ticket, polled every few seconds.
+- **A ticket with no draft is never read.** Until a draft exists the panel only asks Overturn for a recorded run; the ticket, its messages and its order are fetched once a draft is there, and the sent reply itself is kept out of the captured context (it is the decision's output, not what the agent saw).
 - **A widget cannot stop a send.** With `require_reason` on (the default), a changed send with no reason picked holds its capture in the panel ("Pick why you changed the reply - the capture is held until you do") and posts the moment the agent clicks a reason. The reply is never delayed; the correction is never posted reason-less.
 
 What the agent sees:
@@ -15,7 +16,7 @@ What the agent sees:
 - A **reason** row of one-click chips from the support pack (wrong answer, missing information, should have escalated, tone / wording...) and an optional note.
 - On **send**: sent as drafted → an `approve` capture, no prompt; changed → an `edit` capture with the reason as the case's title and the judge's rubric.
 
-Overturn failing never blocks the agent's work; the panel says what happened. With a `scope_tag` set, tickets without the tag are never read at all.
+Overturn failing never blocks the agent's work; the panel says what happened, and a capture that fails is retried on the next poll (up to three tries) instead of being lost. With a `scope_tag` set, tickets without the tag are never captured; the tag is checked when the ticket is first read, which only happens once a draft exists.
 
 ## Install
 

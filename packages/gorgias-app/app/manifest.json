@@ -50,6 +50,26 @@
       "name": "require_reason",
       "required": false,
       "type": "checkbox"
+    },
+    {
+      "default": false,
+      "helpText": "Also capture internal notes, not only public replies.",
+      "name": "capture_internal_notes",
+      "required": false,
+      "type": "checkbox"
+    },
+    {
+      "helpText": "Optional. Only tickets carrying this tag are watched; every other ticket is never captured. Without it, every ticket is watched once a draft exists.",
+      "name": "scope_tag",
+      "required": false,
+      "type": "text"
+    },
+    {
+      "default": "80",
+      "helpText": "Text pasted into the panel, at least this long, counts as the draft.",
+      "name": "min_draft_chars",
+      "required": false,
+      "type": "text"
     }
   ],
   "version": "0.1.0",

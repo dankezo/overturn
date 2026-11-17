@@ -34,6 +34,8 @@ export interface TicketSnapshot {
     status?: string;
     fulfillmentStatus?: string;
   } | null;
+  /** Ticket tags, by name, for the scope_tag setting. */
+  tags: string[];
   /** Ticket custom fields by name. */
   fields: Record<string, unknown>;
   url: string | null;
@@ -119,10 +121,12 @@ function role(m: TicketSnapshot["messages"][number]): CaptureMessage["role"] {
   return m.kind === "agent" ? "agent" : "customer";
 }
 
-/** The thread the agent saw, oldest first, as capture context. */
-export function contextFrom(ticket: TicketSnapshot): CaptureMessage[] {
+/** The thread the agent saw, oldest first, as capture context. The message the agent just
+ * sent is the decision's output, not what they saw when deciding, so when its id is known
+ * it is left out here (it still rides on the payload as `sent`). */
+export function contextFrom(ticket: TicketSnapshot, excludeId?: number | string): CaptureMessage[] {
   return ticket.messages
-    .filter((m) => m.body?.trim())
+    .filter((m) => m.body?.trim() && m.id !== excludeId)
     .map((m) => ({
       role: role(m),
       author: m.authorEmail ?? m.authorName ?? null,
@@ -178,10 +182,54 @@ export function orderFieldsFrom(ticket: TicketSnapshot): Record<string, unknown>
   return out;
 }
 
+/**
+ * The ticket's order, as Gorgias actually serves it. A ticket carries no order object of
+ * its own; the customer's ecommerce integrations do (Shopify, BigCommerce, ...), each with
+ * an `orders` list. The newest order across integrations is the one the ticket is about.
+ * Only the fields a support decision turns on are kept; no addresses, no payment details.
+ */
+export function latestOrderFrom(integrations: unknown): TicketSnapshot["order"] {
+  if (!integrations || typeof integrations !== "object") return null;
+  const str = (v: unknown): string | null =>
+    typeof v === "string" && v ? v : typeof v === "number" ? String(v) : null;
+  const rec = (v: unknown): Record<string, unknown> =>
+    typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const found: Array<{ at: string; order: Exclude<TicketSnapshot["order"], null> }> = [];
+  for (const data of Object.values(integrations as Record<string, unknown>)) {
+    const list = rec(data).orders;
+    if (!Array.isArray(list)) continue;
+    for (const raw of list) {
+      const o = rec(raw);
+      const id = o.id;
+      if ((typeof id !== "string" && typeof id !== "number") || id === "") continue;
+      const totalRaw = o.total_price ?? o.total;
+      const shopMoney = rec(rec(o.total_price_set).shop_money);
+      found.push({
+        at: str(o.created_at) ?? "",
+        order: {
+          id,
+          number: str(o.name) ?? id,
+          total: typeof totalRaw === "string" || typeof totalRaw === "number" ? totalRaw : undefined,
+          currency: str(o.currency) ?? str(shopMoney.currency_code) ?? undefined,
+          status: str(o.financial_status) ?? str(o.status) ?? undefined,
+          fulfillmentStatus: str(o.fulfillment_status) ?? undefined,
+        },
+      });
+    }
+  }
+  if (!found.length) return null;
+  found.sort((a, b) => b.at.localeCompare(a.at));
+  return found[0]?.order ?? null;
+}
+
 export interface PendingSend {
+  /** The ticket message this send is, so the decision can keep it out of the context. */
+  id?: number | string;
   text: string;
   type: "publicReply" | "internalNote" | string;
   fields: Record<string, unknown>;
+  /** Who sent it, when the message names them. */
+  actor?: string | null;
 }
 
 export type SendDecision =
@@ -234,7 +282,7 @@ export function decideOnSend(input: {
     agent: settings.agent,
     actor: input.actor,
     subject: ticket.subject,
-    context: contextFrom(ticket),
+    context: contextFrom(ticket, send.id),
     draft: draftAnswer,
     sent: sentAnswer,
     reason: reason || null,
@@ -265,9 +313,22 @@ export function sentFromMessages(
 ): PendingSend | null {
   for (const m of messages) {
     if (seenIds.has(m.id)) continue;
-    if (m.kind === "agent") return { text: m.body, type: "publicReply", fields: {} };
+    if (m.kind === "agent")
+      return {
+        id: m.id,
+        text: m.body,
+        type: "publicReply",
+        fields: {},
+        actor: m.authorEmail ?? m.authorName ?? null,
+      };
     if (m.kind === "note" && settings.captureInternalNotes)
-      return { text: m.body, type: "internalNote", fields: {} };
+      return {
+        id: m.id,
+        text: m.body,
+        type: "internalNote",
+        fields: {},
+        actor: m.authorEmail ?? m.authorName ?? null,
+      };
   }
   return null;
 }
