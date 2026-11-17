@@ -80,6 +80,20 @@ describe("settings", () => {
     expect(settingsFrom({})).toEqual(DEFAULT_SETTINGS);
     expect(settingsFrom({ require_reason: "false" }).requireReason).toBe(false);
   });
+
+  it("boolean settings read case-insensitively, so TRUE means on", () => {
+    expect(settingsFrom({ require_reason: "True" }).requireReason).toBe(true);
+    expect(settingsFrom({ require_reason: "TRUE" }).requireReason).toBe(true);
+    expect(settingsFrom({ require_reason: "FALSE" }).requireReason).toBe(false);
+    expect(settingsFrom({ capture_internal_notes: "True" }).captureInternalNotes).toBe(true);
+  });
+
+  it("decision fields with no id are dropped instead of becoming an empty field", () => {
+    expect(settingsFrom({ decision_fields: "status:status, :,reserve" }).decisionFields).toEqual([
+      { id: "status", label: "status" },
+      { id: "reserve", label: "reserve" },
+    ]);
+  });
 });
 
 describe("draft detection", () => {
@@ -122,6 +136,19 @@ describe("context and html", () => {
       },
       { role: "note", author: "Ray", content: "HO-3, no prior claims.", at: null },
     ]);
+  });
+
+  it("drops style and script blocks and the apos entity instead of leaking them as text", () => {
+    expect(stripHtml("<style>.x{color:red}</style><p>hi</p>")).toBe("hi");
+    expect(stripHtml("<script>var x = 1;</script><p>hi</p>")).toBe("hi");
+    expect(stripHtml("<p>it&apos;s fine</p>")).toBe("it's fine");
+  });
+
+  it("the message just sent is context for nobody: it is excluded, not duplicated as context", () => {
+    expect(contextFrom(conversation, "msg_1")).toEqual([
+      { role: "note", author: "Ray", content: "HO-3, no prior claims.", at: null },
+    ]);
+    expect(contextFrom(conversation, "msg_missing")).toHaveLength(2);
   });
 });
 
@@ -212,6 +239,23 @@ describe("decideOnSend", () => {
     expect(noteOnly.action).toBe("need-reason");
   });
 
+  it("the capture context leaves out the message just sent", () => {
+    const withSend = {
+      ...conversation,
+      messages: [...conversation.messages, { id: "msg_3", body: draftText, kind: "outbound" }],
+    };
+    const d = decideOnSend({
+      ...base,
+      conversation: withSend,
+      send: { messageId: "msg_3", text: draftText, type: "publicReply", fields: {} },
+    });
+    expect(d.action).toBe("capture");
+    if (d.action !== "capture") return;
+    expect(d.body.context).toHaveLength(2);
+    expect(d.body.sent.text).toBe(d.body.draft.text);
+    expect(d.body.context.every((m) => m.content !== d.body.sent.text)).toBe(true);
+  });
+
   it("decision fields ride on both answers when configured", () => {
     const settings = {
       ...DEFAULT_SETTINGS,
@@ -240,11 +284,22 @@ describe("sentFromMessages", () => {
     const seen = new Set(msgs.map((m) => m.id));
     const withSend = [...msgs, { id: "msg_3", body: "Sent text", kind: "outbound" }];
     expect(sentFromMessages(seen, withSend, DEFAULT_SETTINGS)).toEqual({
+      messageId: "msg_3",
       text: "Sent text",
       type: "publicReply",
       fields: {},
     });
     expect(sentFromMessages(new Set(withSend.map((m) => m.id)), withSend, DEFAULT_SETTINGS)).toBeNull();
+  });
+  it("a draft armed from a recorded run does not turn an older outbound message into its send", () => {
+    // The rule the panel upholds when a draft is armed: the thread as it stands at
+    // arming time is baselined first, so only a message arriving after the draft
+    // can read as its send.
+    const thread = [...msgs, { id: "msg_old", body: "An earlier reply, sent days ago.", kind: "outbound" }];
+    const baselined = new Set(thread.map((m) => m.id));
+    expect(sentFromMessages(baselined, thread, DEFAULT_SETTINGS)).toBeNull();
+    // The same thread with nothing baselined would misread the old reply as a send.
+    expect(sentFromMessages(new Set(), thread, DEFAULT_SETTINGS)?.messageId).toBe("msg_old");
   });
   it("an inbound message is never a send, and a note is one only when notes are captured", () => {
     const inbound = [{ id: "m9", body: "customer reply", kind: "inbound" }];
@@ -252,6 +307,7 @@ describe("sentFromMessages", () => {
     const note = [{ id: "m8", body: "internal", kind: "note" }];
     expect(sentFromMessages(new Set(), note, DEFAULT_SETTINGS)).toBeNull();
     expect(sentFromMessages(new Set(), note, { ...DEFAULT_SETTINGS, captureInternalNotes: true })).toEqual({
+      messageId: "m8",
       text: "internal",
       type: "internalNote",
       fields: {},

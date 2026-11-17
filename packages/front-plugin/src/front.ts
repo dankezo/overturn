@@ -84,8 +84,11 @@ export function customFieldsFrom(
 ): Record<string, unknown> {
   const fields: Record<string, unknown> = {};
   for (const attribute of attributes) {
-    fields[attribute.name] =
-      attribute.value instanceof Date ? attribute.value.toISOString() : attribute.value;
+    const value = attribute.value instanceof Date ? attribute.value.toISOString() : attribute.value;
+    fields[attribute.name] = value;
+    // Also key by the field id: an installer copying the id out of Front's settings
+    // (fld_...) must find the same value as one using the field name.
+    if (attribute.id !== attribute.name) fields[attribute.id] = value;
   }
   return fields;
 }

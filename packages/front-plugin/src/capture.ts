@@ -70,7 +70,11 @@ export function settingsFrom(raw: Record<string, unknown>): AppSettings {
   const bool = (k: string, d: boolean): boolean => {
     const v = raw[k];
     if (typeof v === "boolean") return v;
-    if (typeof v === "string") return v === "true" || v === "1";
+    if (typeof v === "string") {
+      const norm = v.trim().toLowerCase();
+      if (norm === "true" || norm === "1") return true;
+      if (norm === "false" || norm === "0") return false;
+    }
     return d;
   };
   const fields = (str("decision_fields") ?? "")
@@ -80,7 +84,8 @@ export function settingsFrom(raw: Record<string, unknown>): AppSettings {
     .map((s) => {
       const [id, label] = s.split(":").map((x) => x.trim());
       return { id: id!, label: label || id! };
-    });
+    })
+    .filter((f) => f.id.length > 0);
   const min = Number(str("min_draft_chars") ?? "");
   return {
     baseUrl: (str("overturn_base_url") ?? DEFAULT_SETTINGS.baseUrl).replace(/\/+$/, ""),
@@ -164,10 +169,15 @@ function role(m: ConversationSnapshot["messages"][number]): CaptureMessage["role
   return m.kind === "outbound" ? "agent" : "customer";
 }
 
-/** The thread the teammate saw, oldest first, as capture context. */
-export function contextFrom(conversation: ConversationSnapshot): CaptureMessage[] {
+/**
+ * The thread the teammate saw, oldest first, as capture context. The message just sent
+ * is excluded when its id is given: it is the `sent` answer, not something the teammate
+ * saw before sending, and listing it here would duplicate it in the capture.
+ */
+export function contextFrom(conversation: ConversationSnapshot, excludeMessageId?: string): CaptureMessage[] {
   return conversation.messages
     .filter((m) => m.body?.trim())
+    .filter((m) => m.id !== excludeMessageId)
     .map((m) => ({
       role: role(m),
       author: m.authorEmail ?? m.authorName ?? null,
@@ -180,6 +190,8 @@ export function contextFrom(conversation: ConversationSnapshot): CaptureMessage[
 export function stripHtml(html: string): string {
   return normalizeCaptureText(
     html
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
       .replace(/<[^>]+>/g, "")
@@ -188,11 +200,13 @@ export function stripHtml(html: string): string {
       .replace(/&lt;/g, "<")
       .replace(/&gt;/g, ">")
       .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'"),
+      .replace(/&#39;|&apos;/g, "'"),
   );
 }
 
 export interface PendingSend {
+  /** Id of the message on the thread, so the capture context can exclude it. */
+  messageId?: string;
   text: string;
   type: "publicReply" | "internalNote" | string;
   fields: Record<string, unknown>;
@@ -244,7 +258,7 @@ export function decideOnSend(input: {
     agent: settings.agent,
     actor: input.actor,
     subject: conversation.subject,
-    context: contextFrom(conversation),
+    context: contextFrom(conversation, send.messageId),
     draft: draftAnswer,
     sent: sentAnswer,
     reason: reason || null,
@@ -273,9 +287,9 @@ export function sentFromMessages(
 ): PendingSend | null {
   for (const m of messages) {
     if (seenIds.has(m.id)) continue;
-    if (m.kind === "outbound") return { text: m.body, type: "publicReply", fields: {} };
+    if (m.kind === "outbound") return { messageId: m.id, text: m.body, type: "publicReply", fields: {} };
     if (m.kind === "note" && settings.captureInternalNotes)
-      return { text: m.body, type: "internalNote", fields: {} };
+      return { messageId: m.id, text: m.body, type: "internalNote", fields: {} };
   }
   return null;
 }

@@ -183,6 +183,10 @@ describe("snapshotFromReader", () => {
     expect(decision.body.externalId).toBe("fr:cnv_123");
     expect(decision.body.sent.text).toContain("2 business days");
     expect(decision.body.tags).toEqual(["draft:inserted", "public-reply"]);
+    // The sent message is the `sent` answer, not context: the capture context is
+    // the thread the teammate saw before sending, without the reply itself.
+    expect(decision.body.context).toHaveLength(1);
+    expect(decision.body.context[0]!.content).toContain("Water came through the ceiling.");
   });
 
   it("an internal comment listed through the context is a send only when notes are captured", async () => {
@@ -191,6 +195,7 @@ describe("snapshotFromReader", () => {
     expect(sentFromMessages(new Set(), snap!.messages, DEFAULT_SETTINGS)).toBeNull();
     const withNotes = { ...DEFAULT_SETTINGS, captureInternalNotes: true };
     expect(sentFromMessages(new Set(), snap!.messages, withNotes)).toEqual({
+      messageId: "cmt_1",
       text: "HO-3, no prior claims.",
       type: "internalNote",
       fields: {},
@@ -228,7 +233,12 @@ describe("custom field attributes", () => {
     const snap = await snapshotFromReader(
       readerFor(conversationWith({ customFieldAttributes: attributes }), []),
     );
-    expect(snap!.customFields).toEqual({ status: "approved", total: 4200 });
+    expect(snap!.customFields).toEqual({
+      status: "approved",
+      fld_status: "approved",
+      total: 4200,
+      fld_total: 4200,
+    });
   });
 
   it("populate the decision fields a capture is diffed on", async () => {
@@ -238,7 +248,9 @@ describe("custom field attributes", () => {
     const settings = {
       ...DEFAULT_SETTINGS,
       requireReason: false,
-      decisionFields: [{ id: "status", label: "status" }],
+      // The field is named by its Front id here, not its label: installers copy the
+      // id out of Front's settings, so it must resolve to the same value.
+      decisionFields: [{ id: "fld_status", label: "status" }],
     };
     // The send-side fields are read off the snapshot the way the panel reads them.
     const sendFields = Object.fromEntries(

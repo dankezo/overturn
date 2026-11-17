@@ -8,9 +8,11 @@ A small panel in the conversation sidebar:
 
 - **Draft inserted · 112 words** once an AI assist, macro or paste lands in the reply box (anything reply-sized inserted in one go). If the drafting agent recorded its run with the Overturn SDK (`externalId: "fr:<conversation id>"`), the draft is taken from that run instead. "Use the current text as the draft" marks it by hand.
 - A **reason** box with quick picks from the claims pack (wrong coverage decision, wrong amount or date, missing required step, tone / wording, policy exception...). A support team can switch to the vendor-neutral support pack with the `reason_pack` setting.
-- On **send**: sent as drafted → an `approve` capture, no prompt; changed → an `edit` capture with the reason as the case's title and the judge's rubric.
+- On **send**: sent as drafted → an `approve` capture, no prompt; changed → an `edit` capture with the reason as the case's title and the judge's rubric. The capture context is the thread the teammate saw before sending: the reply just sent is the `sent` answer, not context, so it is not listed twice.
 
 Overturn failing never blocks the teammate's work; the panel says what happened.
+
+Two things the panel does not do: it never lists a conversation's messages until a draft is armed there (a conversation with no draft in it is never read, and an out-of-scope conversation is never read at all), and it never trusts a context update alone to notice the send - while a draft is armed it re-checks the thread every 2 seconds, because Front sends no context update while the teammate types and the update after a send can lag the message list.
 
 ### One honest limitation: `require_reason` in Front
 
@@ -25,7 +27,7 @@ In Zendesk, the app blocks a changed Submit until a reason is picked, because ZA
    - `overturn_api_key`: the project API key (sent as the capture bearer token)
    - `reason_pack`: `claims` (default on this surface) or `support`, the one-click reasons teammates see
    - `agent`: the workflow name, one regression suite per workflow (default `support-reply`)
-   - `decision_fields`: conversation custom fields that *are* the decision, as `name:label` pairs, e.g. `status:status, total:total`. Changes to these are scored exactly; the prose is scored by the judge.
+   - `decision_fields`: conversation custom fields that *are* the decision, as `name:label` pairs, e.g. `status:status, total:total`. A field may be named by its Front id (`fld_...`) or its name. Changes to these are scored exactly; the prose is scored by the judge.
    - `require_reason` (default on), `capture_internal_notes`, `min_draft_chars`, `scope_tag` (only conversations carrying this tag are watched; every other conversation is never read), `overturn_base_url` (self-hosting)
 
 ## Replay what it captured
