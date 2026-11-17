@@ -76,6 +76,13 @@ describe("settings", () => {
     expect(settingsFrom({ reason_pack: "garbage" }).reasonPack).toBe("support");
   });
 
+  it("the default workflow follows the reason pack", () => {
+    expect(settingsFrom({}).agent).toBe("claims-reply");
+    expect(settingsFrom({ agent: "support-reply" }).agent).toBe("support-reply");
+    expect(settingsFrom({ reason_pack: "support" }).agent).toBe("support-reply");
+    expect(settingsFrom({ reason_pack: "support", agent: "claims-reply" }).agent).toBe("claims-reply");
+  });
+
   it("falls back to defaults, with require_reason on", () => {
     expect(settingsFrom({})).toEqual(DEFAULT_SETTINGS);
     expect(settingsFrom({ require_reason: "false" }).requireReason).toBe(false);
@@ -144,6 +151,27 @@ describe("context and html", () => {
     expect(stripHtml("<p>it&apos;s fine</p>")).toBe("it's fine");
   });
 
+  it("plain-text and markdown bodies keep their angle brackets; html is still stripped", () => {
+    const mixed: ConversationSnapshot = {
+      ...conversation,
+      messages: [
+        {
+          id: "t1",
+          body: "Covered when the loss is < $5,000 and > $0.",
+          kind: "inbound",
+          contentType: "text",
+        },
+        { id: "t2", body: "Check `List<T>` before the call.", kind: "note", contentType: "markdown" },
+        { id: "t3", body: "<p>Covered when a < b.</p>", kind: "inbound", contentType: "html" },
+      ],
+    };
+    expect(contextFrom(mixed).map((m) => m.content)).toEqual([
+      "Covered when the loss is < $5,000 and > $0.",
+      "Check `List<T>` before the call.",
+      "Covered when a < b.",
+    ]);
+  });
+
   it("the message just sent is context for nobody: it is excluded, not duplicated as context", () => {
     expect(contextFrom(conversation, "msg_1")).toEqual([
       { role: "note", author: "Ray", content: "HO-3, no prior claims.", at: null },
@@ -191,6 +219,17 @@ describe("decideOnSend", () => {
     expect(typeof d.body.secondsToSend).toBe("number");
     expect(d.body.context).toHaveLength(2);
     // The body the plugin posts must satisfy the shared capture contract.
+    expect(captureCreateSchema.safeParse(d.body).success).toBe(true);
+  });
+
+  it("a sent reply in plain text keeps its angle brackets", () => {
+    const d = decideOnSend({
+      ...base,
+      send: { text: "Covered when a < b.", contentType: "text", type: "publicReply", fields: {} },
+    });
+    expect(d.action).toBe("capture");
+    if (d.action !== "capture") return;
+    expect(d.body.sent.text).toBe("Covered when a < b.");
     expect(captureCreateSchema.safeParse(d.body).success).toBe(true);
   });
 
@@ -290,6 +329,16 @@ describe("sentFromMessages", () => {
       fields: {},
     });
     expect(sentFromMessages(new Set(withSend.map((m) => m.id)), withSend, DEFAULT_SETTINGS)).toBeNull();
+  });
+  it("carries the message's declared content type through to the send", () => {
+    const text = [{ id: "m1", body: "a < b", kind: "outbound", contentType: "text" as const }];
+    expect(sentFromMessages(new Set(), text, DEFAULT_SETTINGS)).toEqual({
+      messageId: "m1",
+      text: "a < b",
+      contentType: "text",
+      type: "publicReply",
+      fields: {},
+    });
   });
   it("a draft armed from a recorded run does not turn an older outbound message into its send", () => {
     // The rule the panel upholds when a draft is armed: the thread as it stands at

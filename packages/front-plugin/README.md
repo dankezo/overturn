@@ -26,7 +26,7 @@ In Zendesk, the app blocks a changed Submit until a reason is picked, because ZA
 4. Settings:
    - `overturn_api_key`: the project API key (sent as the capture bearer token)
    - `reason_pack`: `claims` (default on this surface) or `support`, the one-click reasons teammates see
-   - `agent`: the workflow name, one regression suite per workflow (default `support-reply`)
+   - `agent`: the workflow name, one regression suite per workflow (default follows the reason pack: `claims-reply` under the claims default, `support-reply` under `support`)
    - `decision_fields`: conversation custom fields that *are* the decision, as `name:label` pairs, e.g. `status:status, total:total`. A field may be named by its Front id (`fld_...`) or its name. Changes to these are scored exactly; the prose is scored by the judge.
    - `require_reason` (default on), `capture_internal_notes`, `min_draft_chars`, `scope_tag` (only conversations carrying this tag are watched; every other conversation is never read), `overturn_base_url` (self-hosting)
 

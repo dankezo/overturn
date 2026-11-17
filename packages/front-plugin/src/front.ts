@@ -60,6 +60,7 @@ function messageRow(message: ApplicationMessage): ConversationSnapshot["messages
   return {
     id: message.id,
     body: message.content?.body ?? "",
+    contentType: message.content?.type ?? "text",
     kind: message.status === "inbound" ? "inbound" : "outbound",
     authorName: message.from.name ?? null,
     authorEmail: message.from.handle,
@@ -71,6 +72,8 @@ function commentRow(comment: ApplicationComment): ConversationSnapshot["messages
   return {
     id: comment.id,
     body: comment.content.body,
+    // Front comments are markdown, not HTML: their `<` characters are text, not tags.
+    contentType: "markdown",
     kind: "note",
     authorName: comment.author.name ?? null,
     authorEmail: comment.author.email,

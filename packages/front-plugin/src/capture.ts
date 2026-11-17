@@ -1,5 +1,6 @@
 import type { CaptureAnswer, CaptureCreate, CaptureMessage } from "@overturn-ai/shared";
 import {
+  CLAIMS_AGENTS,
   diffCaptureAnswers,
   normalizeCaptureText,
   REASON_PACKS,
@@ -20,6 +21,8 @@ export interface ConversationSnapshot {
     id: string;
     /** HTML or plain text, as Front returns message bodies. */
     body: string;
+    /** What the body is: Front message bodies are `html` or `text`, comments are markdown. */
+    contentType?: "html" | "text" | "markdown";
     /** Inbound (customer), outbound (teammate) or an internal comment/note. */
     kind: "inbound" | "outbound" | "note" | string;
     authorName?: string | null;
@@ -50,7 +53,9 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   baseUrl: "https://api.overturn.run",
-  agent: "support-reply",
+  // The claims workflow's reply agent: this surface defaults to the claims pack,
+  // so its default workflow is the claims one, not the Zendesk app's support one.
+  agent: CLAIMS_AGENTS.reply,
   requireReason: true,
   captureInternalNotes: false,
   decisionFields: [],
@@ -87,16 +92,20 @@ export function settingsFrom(raw: Record<string, unknown>): AppSettings {
     })
     .filter((f) => f.id.length > 0);
   const min = Number(str("min_draft_chars") ?? "");
+  // An absent reason_pack keeps this surface's default (claims); an explicit one is honoured.
+  const reasonPack = str("reason_pack") ? reasonPackFrom(str("reason_pack")) : DEFAULT_SETTINGS.reasonPack;
   return {
     baseUrl: (str("overturn_base_url") ?? DEFAULT_SETTINGS.baseUrl).replace(/\/+$/, ""),
-    agent: str("agent") ?? DEFAULT_SETTINGS.agent,
+    // The workflow follows the pack when the installer does not name one: the claims
+    // pack's runs are recorded under `claims-reply`, the support pack's under
+    // `support-reply` (the Zendesk app's default). Naming `agent` wins over both.
+    agent: str("agent") ?? (reasonPack === "claims" ? CLAIMS_AGENTS.reply : "support-reply"),
     requireReason: bool("require_reason", DEFAULT_SETTINGS.requireReason),
     captureInternalNotes: bool("capture_internal_notes", DEFAULT_SETTINGS.captureInternalNotes),
     decisionFields: fields,
     minDraftChars: Number.isFinite(min) && min > 0 ? min : DEFAULT_SETTINGS.minDraftChars,
     scopeTag: str("scope_tag"),
-    // An absent reason_pack keeps this surface's default (claims); an explicit one is honoured.
-    reasonPack: str("reason_pack") ? reasonPackFrom(str("reason_pack")) : DEFAULT_SETTINGS.reasonPack,
+    reasonPack,
   };
 }
 
@@ -170,6 +179,17 @@ function role(m: ConversationSnapshot["messages"][number]): CaptureMessage["role
 }
 
 /**
+ * The readable text of a message body. HTML bodies are stripped to text; plain-text
+ * and markdown bodies are only whitespace-normalized, so a `<` in the text (a
+ * comparison, a code span) survives instead of being eaten as a tag. A body with no
+ * recorded type is treated as HTML, as before.
+ */
+export function bodyText(body: string, contentType?: "html" | "text" | "markdown"): string {
+  if (contentType === "text" || contentType === "markdown") return normalizeCaptureText(body);
+  return stripHtml(body);
+}
+
+/**
  * The thread the teammate saw, oldest first, as capture context. The message just sent
  * is excluded when its id is given: it is the `sent` answer, not something the teammate
  * saw before sending, and listing it here would duplicate it in the capture.
@@ -181,7 +201,7 @@ export function contextFrom(conversation: ConversationSnapshot, excludeMessageId
     .map((m) => ({
       role: role(m),
       author: m.authorEmail ?? m.authorName ?? null,
-      content: stripHtml(m.body),
+      content: bodyText(m.body, m.contentType),
       at: m.createdAt ?? null,
     }));
 }
@@ -208,6 +228,8 @@ export interface PendingSend {
   /** Id of the message on the thread, so the capture context can exclude it. */
   messageId?: string;
   text: string;
+  /** What the sent text is, as the message declared it; see `bodyText`. */
+  contentType?: "html" | "text" | "markdown";
   type: "publicReply" | "internalNote" | string;
   fields: Record<string, unknown>;
 }
@@ -233,7 +255,7 @@ export function decideOnSend(input: {
   now?: number;
 }): SendDecision {
   const { conversation, draft, send, settings } = input;
-  const sentText = stripHtml(send.text);
+  const sentText = bodyText(send.text, send.contentType);
   if (!sentText) return { action: "skip", why: "empty" };
   if (send.type === "internalNote" && !settings.captureInternalNotes)
     return { action: "skip", why: "internal-note" };
@@ -287,9 +309,22 @@ export function sentFromMessages(
 ): PendingSend | null {
   for (const m of messages) {
     if (seenIds.has(m.id)) continue;
-    if (m.kind === "outbound") return { messageId: m.id, text: m.body, type: "publicReply", fields: {} };
+    if (m.kind === "outbound")
+      return {
+        messageId: m.id,
+        text: m.body,
+        contentType: m.contentType,
+        type: "publicReply",
+        fields: {},
+      };
     if (m.kind === "note" && settings.captureInternalNotes)
-      return { messageId: m.id, text: m.body, type: "internalNote", fields: {} };
+      return {
+        messageId: m.id,
+        text: m.body,
+        contentType: m.contentType,
+        type: "internalNote",
+        fields: {},
+      };
   }
   return null;
 }

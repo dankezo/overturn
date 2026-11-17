@@ -151,6 +151,24 @@ describe("snapshotFromReader", () => {
     expect(snap!.messages[2]!.createdAt).toBe("2026-10-01T10:10:00.000Z");
   });
 
+  it("records each row's declared content type: html or text messages, markdown comments", async () => {
+    const text = messageWith({
+      id: "msg_3" as ApplicationMessageId,
+      status: "outbound",
+      date: new Date("2026-10-01T10:12:00Z"),
+      content: { body: "a < b", type: "text", attachments: [] },
+      from: { handle: "ray@carrier.com", name: "Ray", contact: undefined, type: "email" },
+    });
+    const snap = await snapshotFromReader(
+      readerFor(conversationWith(), [messageWith(), text], [commentWith()]),
+    );
+    expect(snap!.messages.map((m) => [m.id, m.contentType])).toEqual([
+      ["msg_1", "text"],
+      ["cmt_1", "markdown"],
+      ["msg_3", "text"],
+    ]);
+  });
+
   it("a conversation whose listMessages returns a sent message produces a capture", async () => {
     const sent = messageWith({
       id: "msg_9" as ApplicationMessageId,
@@ -197,6 +215,7 @@ describe("snapshotFromReader", () => {
     expect(sentFromMessages(new Set(), snap!.messages, withNotes)).toEqual({
       messageId: "cmt_1",
       text: "HO-3, no prior claims.",
+      contentType: "markdown",
       type: "internalNote",
       fields: {},
     });
